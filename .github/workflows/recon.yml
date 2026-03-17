@@ -1,30 +1,29 @@
 name: Canva Recon Workflow
 
 on:
-  workflow_dispatch: # تشغيل يدوي
+  workflow_dispatch: # تشغيل يدوي من تبويب Actions
 
 jobs:
   recon:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # تحديث إلى v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # تحديث إلى v5
         with:
           python-version: '3.9'
 
       - name: Install Go & httpx
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5 # تحديث إلى v5
         with:
-          go-version: '1.20'
+          go-version: '1.21'
       - run: go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 
       - name: Install Dependencies
         run: |
           pip install requests urllib3
-          # تحميل EvilWAF إذا لم تكن موجودة
           if [ ! -d "evilwaf" ]; then
             git clone https://github.com/m8sec/evilwaf.git
           fi
@@ -32,31 +31,34 @@ jobs:
 
       - name: Run EvilWAF Hunt
         run: |
-          # تشغيل الأداة وتحويل المخرجات لملف
+          # تشغيل الأداة وتصفية الـ IPs
           python3 evilwaf/evilwaf.py -t https://canva.com --auto-hunt > raw_output.txt
-          # استخراج الـ IPs الفريدة
           grep -E -o "([0-9]{1,3}[\.]){3}[0-9]{1,3}" raw_output.txt | sort -u > ips.txt
           echo "Found $(wc -l < ips.txt) unique IPs"
 
-      - name: Advanced Cross-Match Scan (Bypass Check)
+      - name: Advanced Cross-Match Scan
         run: |
           mkdir -p results
-          # استخدام httpx لعمل فحص ذكي (Host Header + SNI)
-          # سنقوم بإنشاء قائمة "IP:Port" للفحص
-          for ip in $(cat ips.txt); do
-            for sub in $(cat subs.txt); do
-              # فحص HTTP و HTTPS مع SNI وتجاهل أخطاء الشهادة
-              echo "$ip" | ~/go/bin/httpx -H "Host: $sub" -status-code -title -location -silent -content-length -follow-redirects -p 80,443 >> results/all_scans.txt
+          # تأكد من وجود ملف subs.txt في المستودع
+          if [ -f "subs.txt" ]; then
+            for ip in $(cat ips.txt); do
+              for sub in $(cat subs.txt); do
+                # استخدام httpx مع ميزة الـ SNI والـ Host Header
+                echo "$ip" | ~/go/bin/httpx -H "Host: $sub" -sc -title -location -silent -p 80,443 >> results/all_scans.txt
+              done
             done
-          done
+          else
+            echo "Error: subs.txt not found!"
+            exit 1
+          fi
 
-      - name: Filter Potential Bypasses
+      - name: Filter Bypasses
         run: |
-          # استخراج النتائج التي تعطي 200 أو 302 (مثل Okta)
-          grep -E "\[200\]|\[302\]" results/all_scans.txt > results/potential_bypasses.txt || true
+          grep -E "\[200\]|\[301\]|\[302\]" results/all_scans.txt > results/potential_bypasses.txt || true
 
       - name: Upload Results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4 # الحل: التحديث إلى v4 الإلزامي
         with:
-          name: recon-results
+          name: recon-results-${{ github.run_id }} # إضافة ID للتشغيل لتمييز الملفات
           path: results/
+          retention-days: 5 # مسح الملفات تلقائياً بعد 5 أيام لتوفير المساحة
